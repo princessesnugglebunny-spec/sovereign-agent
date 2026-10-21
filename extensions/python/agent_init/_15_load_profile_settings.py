@@ -1,0 +1,71 @@
+from helpers import dirty_json, files, plugins, subagents
+from helpers.extension import Extension
+from initialize import initialize_agent
+
+
+class LoadProfileSettings(Extension):
+    
+    def execute(self, **kwargs) -> None:
+
+        if not self.agent or not self.agent.config.profile:
+            return
+
+        profile = self.agent.config.profile
+        scoped_files = subagents.get_paths(
+            self.agent, "settings.json", include_default=False,
+            include_user=False, include_plugins=False,
+        )
+        default_settings = files.get_abs_path(subagents.DEFAULT_AGENTS_DIR, profile, "settings.json")
+        # Merge low-priority layers first, keeping discovery order within plugin roots.
+        config_files = [
+            *sorted(
+                plugins.get_enabled_plugin_paths(self.agent, "settings.json"),
+                key=plugins.get_plugin_root_priority, reverse=True,
+            ),
+            default_settings,
+            *sorted(
+                plugins.get_enabled_plugin_paths(self.agent, "agents", profile, "settings.json"),
+                key=plugins.get_plugin_root_priority, reverse=True,
+            ),
+            *(path for path in reversed(scoped_files) if path != default_settings),
+        ]
+        settings_override = {}
+        for settings_path in config_files:
+            if files.exists(settings_path):
+                try:
+                    override_settings_str = files.read_file(settings_path)
+                    override_settings = dirty_json.try_parse(override_settings_str)
+                    if isinstance(override_settings, dict):
+                        settings_override.update(override_settings)
+                    else:
+                        raise Exception(
+                            f"Subordinate settings in {settings_path} must be a JSON object."
+                        )
+                except Exception as e:
+                    self.agent.context.log.log(
+                        type="error",
+                        content=(
+                            f"Error loading subordinate settings from {settings_path} for "
+                            f"profile '{self.agent.config.profile}': {e}"
+                        ),
+                    )
+
+        if settings_override:
+            current_config = self.agent.config
+            new_config = initialize_agent(override_settings=settings_override)
+
+            for override_key, config_attr in (
+                ("agent_profile", "profile"),
+                ("mcp_servers", "mcp_servers"),
+            ):
+                if override_key not in settings_override:
+                    setattr(new_config, config_attr, getattr(current_config, config_attr))
+            self.agent.config = new_config
+            # self.agent.context.log.log(
+            #     type="info",
+            #     content=(
+            #         "Loaded custom settings for agent "
+            #         f"{self.agent.number} with profile '{self.agent.config.profile}'."
+            #     ),
+            # )
+

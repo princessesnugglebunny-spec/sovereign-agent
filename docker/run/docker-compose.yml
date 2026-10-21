@@ -1,0 +1,14 @@
+services:
+  sovereign-agent:
+    container_name: sovereign-agent
+    image: sovereignai/sovereign-agent:latest
+    volumes:
+      - ./sovereign-agent:/a0
+    ports:
+      - "50080:80"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
